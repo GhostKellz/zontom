@@ -1,0 +1,59 @@
+# Web Server Configuration Example
+
+[server]
+host = "0.0.0.0"
+port = 8080
+workers = 16
+timeout_seconds = 30
+
+[server.ssl]
+enabled = true
+cert_file = "/etc/ssl/certs/server.crt"
+key_file = "/etc/ssl/private/server.key"
+protocols = ["TLSv1.2", "TLSv1.3"]
+
+[logging]
+level = "info"
+file = "/var/log/server.log"
+max_size_mb = 100
+rotate = true
+
+[database]
+host = "db.example.com"
+port = 5432
+database = "production"
+username = "app_user"
+password = "secure_password"
+pool_size = 20
+timeout_seconds = 10
+
+[[routes]]
+path = "/api/v1/users"
+method = "GET"
+handler = "getUsersHandler"
+auth_required = true
+
+[[routes]]
+path = "/api/v1/users"
+method = "POST"
+handler = "createUserHandler"
+auth_required = true
+
+[[routes]]
+path = "/health"
+method = "GET"
+handler = "healthCheckHandler"
+auth_required = false
+
+[cache]
+enabled = true
+type = "redis"
+host = "localhost"
+port = 6379
+ttl_seconds = 3600
+
+[security]
+cors_enabled = true
+allowed_origins = ["https://example.com", "https://www.example.com"]
+rate_limit_requests = 1000
+rate_limit_window_seconds = 60

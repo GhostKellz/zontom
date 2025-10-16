@@ -1,0 +1,3 @@
+# Invalid TOML - missing closing quote
+name = "unclosed string
+value = 123
