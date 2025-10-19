@@ -195,7 +195,7 @@ pub const Parser = struct {
             .integer => .{ .integer = try self.parseInteger(token.lexeme) },
             .float => .{ .float = try self.parseFloat(token.lexeme) },
             .boolean => .{ .boolean = std.mem.eql(u8, token.lexeme, "true") },
-            .datetime => .{ .datetime = try self.parseDatetime(token.lexeme) },
+            .datetime => try self.parseDatetimeValue(token.lexeme),
             .left_bracket => try self.parseArray(),
             .left_brace => try self.parseInlineTable(),
             else => ParseError.UnexpectedToken,
@@ -207,38 +207,116 @@ pub const Parser = struct {
         if (lexeme.len < 2) return ParseError.InvalidValue;
 
         const quote = lexeme[0];
+        const is_literal = (quote == '\'');
         var result = std.ArrayList(u8){};
         defer result.deinit(self.allocator);
 
         // Check for multi-line strings (triple quotes)
-        if (lexeme.len >= 6 and lexeme[1] == quote and lexeme[2] == quote) {
-            // Triple-quoted string
-            const content = lexeme[3 .. lexeme.len - 3];
-            try result.appendSlice(self.allocator, content);
+        const is_multiline = lexeme.len >= 6 and lexeme[1] == quote and lexeme[2] == quote;
+
+        if (is_multiline) {
+            // Triple-quoted string (multiline)
+            var content = lexeme[3 .. lexeme.len - 3];
+
+            // TOML spec: trim first newline after opening quotes if present
+            if (content.len > 0 and content[0] == '\n') {
+                content = content[1..];
+            } else if (content.len > 1 and content[0] == '\r' and content[1] == '\n') {
+                content = content[2..];
+            }
+
+            if (is_literal) {
+                // Multiline literal string - no escape processing
+                try result.appendSlice(self.allocator, content);
+            } else {
+                // Multiline basic string - process escape sequences
+                var i: usize = 0;
+                while (i < content.len) {
+                    if (content[i] == '\\') {
+                        i += 1;
+                        if (i >= content.len) break;
+
+                        const escaped_char = content[i];
+                        switch (escaped_char) {
+                            'b' => try result.append(self.allocator, '\x08'),
+                            't' => try result.append(self.allocator, '\t'),
+                            'n' => try result.append(self.allocator, '\n'),
+                            'f' => try result.append(self.allocator, '\x0C'),
+                            'r' => try result.append(self.allocator, '\r'),
+                            '"' => try result.append(self.allocator, '"'),
+                            '\\' => try result.append(self.allocator, '\\'),
+                            '\n' => {
+                                // Line-ending backslash: trim newline and following whitespace
+                                i += 1;
+                                while (i < content.len and (content[i] == ' ' or content[i] == '\t' or content[i] == '\n' or content[i] == '\r')) {
+                                    i += 1;
+                                }
+                                i -= 1; // Adjust because loop will increment
+                            },
+                            '\r' => {
+                                // Handle \r\n as line-ending backslash
+                                if (i + 1 < content.len and content[i + 1] == '\n') {
+                                    i += 2;
+                                    while (i < content.len and (content[i] == ' ' or content[i] == '\t' or content[i] == '\n' or content[i] == '\r')) {
+                                        i += 1;
+                                    }
+                                    i -= 1;
+                                } else {
+                                    try result.append(self.allocator, escaped_char);
+                                }
+                            },
+                            'u', 'U' => {
+                                // Unicode escapes - simplified for now, just pass through
+                                try result.append(self.allocator, '\\');
+                                try result.append(self.allocator, escaped_char);
+                            },
+                            else => {
+                                // Invalid escape - this should have been caught by lexer
+                                try result.append(self.allocator, escaped_char);
+                            },
+                        }
+                        i += 1;
+                    } else {
+                        try result.append(self.allocator, content[i]);
+                        i += 1;
+                    }
+                }
+            }
         } else {
             // Single-line string
             const content = lexeme[1 .. lexeme.len - 1];
 
-            var i: usize = 0;
-            while (i < content.len) : (i += 1) {
-                if (content[i] == '\\' and quote == '"') {
-                    // Handle escape sequences
-                    i += 1;
-                    if (i >= content.len) break;
+            if (is_literal) {
+                // Literal string - no escape processing
+                try result.appendSlice(self.allocator, content);
+            } else {
+                // Basic string - process escape sequences
+                var i: usize = 0;
+                while (i < content.len) : (i += 1) {
+                    if (content[i] == '\\') {
+                        // Handle escape sequences
+                        i += 1;
+                        if (i >= content.len) break;
 
-                    const escaped = switch (content[i]) {
-                        'b' => '\x08',
-                        't' => '\t',
-                        'n' => '\n',
-                        'f' => '\x0C',
-                        'r' => '\r',
-                        '"' => '"',
-                        '\\' => '\\',
-                        else => content[i],
-                    };
-                    try result.append(self.allocator, escaped);
-                } else {
-                    try result.append(self.allocator, content[i]);
+                        const escaped = switch (content[i]) {
+                            'b' => '\x08',
+                            't' => '\t',
+                            'n' => '\n',
+                            'f' => '\x0C',
+                            'r' => '\r',
+                            '"' => '"',
+                            '\\' => '\\',
+                            'u', 'U' => blk: {
+                                // Unicode escapes - simplified, just pass through
+                                try result.append(self.allocator, '\\');
+                                break :blk content[i];
+                            },
+                            else => content[i],
+                        };
+                        try result.append(self.allocator, escaped);
+                    } else {
+                        try result.append(self.allocator, content[i]);
+                    }
                 }
             }
         }
@@ -248,12 +326,49 @@ pub const Parser = struct {
     }
 
     fn parseInteger(self: *Parser, lexeme: []const u8) !i64 {
-        // Remove underscores
+        // Validate and remove underscores per TOML 1.0.0 spec
+
+        // Check for hex/octal/binary (not allowed in TOML)
+        if (lexeme.len >= 2) {
+            if (lexeme[0] == '0' and (lexeme[1] == 'x' or lexeme[1] == 'X' or
+                                      lexeme[1] == 'o' or lexeme[1] == 'O' or
+                                      lexeme[1] == 'b' or lexeme[1] == 'B')) {
+                return ParseError.InvalidValue; // Hex/octal/binary not allowed
+            }
+        }
+
+        // Check for leading zeros (not allowed except for "0" itself)
+        if (lexeme.len > 1 and lexeme[0] == '0' and std.ascii.isDigit(lexeme[1])) {
+            return ParseError.InvalidValue; // Leading zeros not allowed
+        }
+
+        // Validate underscore placement
+        if (lexeme.len > 0) {
+            // Cannot start or end with underscore
+            if (lexeme[0] == '_' or lexeme[lexeme.len - 1] == '_') {
+                return ParseError.InvalidValue;
+            }
+
+            // Check for consecutive underscores and validate placement
+            var prev_was_underscore = false;
+            for (lexeme) |c| {
+                if (c == '_') {
+                    if (prev_was_underscore) {
+                        return ParseError.InvalidValue; // Consecutive underscores
+                    }
+                    prev_was_underscore = true;
+                } else {
+                    prev_was_underscore = false;
+                }
+            }
+        }
+
+        // Remove underscores for parsing
         var cleaned = std.ArrayList(u8){};
         defer cleaned.deinit(self.allocator);
 
         for (lexeme) |c| {
-            if (c != '_') {
+            if (c != '_' and c != '+') { // Skip underscores and leading +
                 try cleaned.append(self.allocator, c);
             }
         }
@@ -262,7 +377,57 @@ pub const Parser = struct {
     }
 
     fn parseFloat(self: *Parser, lexeme: []const u8) !f64 {
-        // Remove underscores
+        // Handle special float values first
+        if (std.mem.eql(u8, lexeme, "inf") or std.mem.eql(u8, lexeme, "+inf")) {
+            return std.math.inf(f64);
+        }
+        if (std.mem.eql(u8, lexeme, "-inf")) {
+            return -std.math.inf(f64);
+        }
+        if (std.mem.eql(u8, lexeme, "nan") or std.mem.eql(u8, lexeme, "+nan") or std.mem.eql(u8, lexeme, "-nan")) {
+            return std.math.nan(f64);
+        }
+
+        // Validate and remove underscores per TOML 1.0.0 spec
+
+        // Validate underscore placement
+        if (lexeme.len > 0) {
+            // Cannot start or end with underscore
+            if (lexeme[0] == '_' or lexeme[lexeme.len - 1] == '_') {
+                return ParseError.InvalidValue;
+            }
+
+            // Check for invalid underscore placement
+            var prev_was_underscore = false;
+            var i: usize = 0;
+            while (i < lexeme.len) : (i += 1) {
+                const c = lexeme[i];
+
+                if (c == '_') {
+                    if (prev_was_underscore) {
+                        return ParseError.InvalidValue; // Consecutive underscores
+                    }
+                    // Underscore cannot be adjacent to decimal point, exponent, or sign
+                    if (i > 0) {
+                        const prev = lexeme[i - 1];
+                        if (prev == '.' or prev == 'e' or prev == 'E' or prev == '+' or prev == '-') {
+                            return ParseError.InvalidValue;
+                        }
+                    }
+                    if (i < lexeme.len - 1) {
+                        const next = lexeme[i + 1];
+                        if (next == '.' or next == 'e' or next == 'E' or next == '+' or next == '-') {
+                            return ParseError.InvalidValue;
+                        }
+                    }
+                    prev_was_underscore = true;
+                } else {
+                    prev_was_underscore = false;
+                }
+            }
+        }
+
+        // Remove underscores for parsing
         var cleaned = std.ArrayList(u8){};
         defer cleaned.deinit(self.allocator);
 
@@ -275,10 +440,99 @@ pub const Parser = struct {
         return std.fmt.parseFloat(f64, cleaned.items) catch ParseError.InvalidValue;
     }
 
+    fn parseDatetimeValue(self: *Parser, lexeme: []const u8) !Value {
+        // Determine which datetime type this is based on the format
+        // TOML 1.0.0 has four datetime types:
+        // 1. Offset Date-Time: 1979-05-27T07:32:00Z or 1979-05-27T07:32:00-07:00
+        // 2. Local Date-Time: 1979-05-27T07:32:00
+        // 3. Local Date: 1979-05-27
+        // 4. Local Time: 07:32:00 or 07:32:00.999999
+
+        // Check if it's just a date (YYYY-MM-DD with length 10)
+        if (lexeme.len == 10 and lexeme[4] == '-' and lexeme[7] == '-') {
+            return .{ .date = try self.parseDate(lexeme) };
+        }
+
+        // Check if it's just a time (HH:MM:SS...)
+        if (lexeme.len >= 8 and lexeme[2] == ':' and lexeme[5] == ':') {
+            return .{ .time = try self.parseTime(lexeme) };
+        }
+
+        // Otherwise it's a full datetime
+        return .{ .datetime = try self.parseDatetime(lexeme) };
+    }
+
+    fn parseDate(self: *Parser, lexeme: []const u8) !value.Date {
+        _ = self;
+        if (lexeme.len != 10) return ParseError.InvalidValue;
+
+        const year = std.fmt.parseInt(u16, lexeme[0..4], 10) catch return ParseError.InvalidValue;
+        const month = std.fmt.parseInt(u8, lexeme[5..7], 10) catch return ParseError.InvalidValue;
+        const day = std.fmt.parseInt(u8, lexeme[8..10], 10) catch return ParseError.InvalidValue;
+
+        // Validate date ranges
+        if (month < 1 or month > 12) return ParseError.InvalidValue;
+        if (day < 1 or day > 31) return ParseError.InvalidValue;
+
+        // Month-specific day validation
+        const days_in_month = [_]u8{ 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+        if (day > days_in_month[month - 1]) return ParseError.InvalidValue;
+
+        return .{ .year = year, .month = month, .day = day };
+    }
+
+    fn parseTime(self: *Parser, lexeme: []const u8) !value.Time {
+        _ = self;
+        if (lexeme.len < 8) return ParseError.InvalidValue;
+
+        const hour = std.fmt.parseInt(u8, lexeme[0..2], 10) catch return ParseError.InvalidValue;
+        const minute = std.fmt.parseInt(u8, lexeme[3..5], 10) catch return ParseError.InvalidValue;
+        const second = std.fmt.parseInt(u8, lexeme[6..8], 10) catch return ParseError.InvalidValue;
+
+        // Validate time ranges
+        if (hour > 23) return ParseError.InvalidValue;
+        if (minute > 59) return ParseError.InvalidValue;
+        if (second > 60) return ParseError.InvalidValue; // Allow leap second
+
+        var nanosecond: u32 = 0;
+
+        // Parse fractional seconds if present
+        if (lexeme.len > 8 and lexeme[8] == '.') {
+            var pos: usize = 9;
+            const frac_start = pos;
+
+            // Consume all digits
+            while (pos < lexeme.len and std.ascii.isDigit(lexeme[pos])) {
+                pos += 1;
+            }
+
+            if (pos == frac_start) return ParseError.InvalidValue; // Must have at least one digit
+
+            const frac_str = lexeme[frac_start..pos];
+
+            // Convert to nanoseconds (pad or truncate to 9 digits)
+            var nanos: u32 = 0;
+            var multiplier: u32 = 100_000_000; // Start at 10^8
+
+            for (frac_str, 0..) |c, i| {
+                if (i >= 9) break; // Truncate if more than 9 digits
+                const digit = c - '0';
+                nanos += digit * multiplier;
+                multiplier /= 10;
+            }
+
+            nanosecond = nanos;
+
+            // Ensure we've consumed the entire string
+            if (pos != lexeme.len) return ParseError.InvalidValue;
+        }
+
+        return .{ .hour = hour, .minute = minute, .second = second, .nanosecond = nanosecond };
+    }
+
     fn parseDatetime(self: *Parser, lexeme: []const u8) !value.Datetime {
         _ = self;
-        // Simplified datetime parser - just parse basic format
-        // Full RFC3339 parsing would be more complex
+        // Full RFC3339 datetime parser for TOML 1.0.0
 
         var dt: value.Datetime = undefined;
 
@@ -289,6 +543,14 @@ pub const Parser = struct {
         dt.month = std.fmt.parseInt(u8, lexeme[5..7], 10) catch return ParseError.InvalidValue;
         dt.day = std.fmt.parseInt(u8, lexeme[8..10], 10) catch return ParseError.InvalidValue;
 
+        // Validate date ranges
+        if (dt.month < 1 or dt.month > 12) return ParseError.InvalidValue;
+        if (dt.day < 1 or dt.day > 31) return ParseError.InvalidValue;
+
+        // Month-specific day validation
+        const days_in_month = [_]u8{ 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+        if (dt.day > days_in_month[dt.month - 1]) return ParseError.InvalidValue;
+
         // If there's a time component
         if (lexeme.len > 10 and (lexeme[10] == 'T' or lexeme[10] == 't' or lexeme[10] == ' ')) {
             if (lexeme.len < 19) return ParseError.InvalidValue;
@@ -296,8 +558,80 @@ pub const Parser = struct {
             dt.hour = std.fmt.parseInt(u8, lexeme[11..13], 10) catch return ParseError.InvalidValue;
             dt.minute = std.fmt.parseInt(u8, lexeme[14..16], 10) catch return ParseError.InvalidValue;
             dt.second = std.fmt.parseInt(u8, lexeme[17..19], 10) catch return ParseError.InvalidValue;
-            dt.nanosecond = 0; // TODO: parse fractional seconds
-            dt.offset_minutes = null; // TODO: parse timezone
+
+            // Validate time ranges
+            if (dt.hour > 23) return ParseError.InvalidValue;
+            if (dt.minute > 59) return ParseError.InvalidValue;
+            if (dt.second > 60) return ParseError.InvalidValue; // Allow leap second
+
+            var pos: usize = 19;
+
+            // Parse fractional seconds if present
+            if (pos < lexeme.len and lexeme[pos] == '.') {
+                pos += 1;
+                const frac_start = pos;
+
+                // Consume all digits
+                while (pos < lexeme.len and std.ascii.isDigit(lexeme[pos])) {
+                    pos += 1;
+                }
+
+                if (pos == frac_start) return ParseError.InvalidValue; // Must have at least one digit
+
+                const frac_str = lexeme[frac_start..pos];
+
+                // Convert to nanoseconds (pad or truncate to 9 digits)
+                var nanos: u32 = 0;
+                var multiplier: u32 = 100_000_000; // Start at 10^8
+
+                for (frac_str, 0..) |c, i| {
+                    if (i >= 9) break; // Truncate if more than 9 digits
+                    const digit = c - '0';
+                    nanos += digit * multiplier;
+                    multiplier /= 10;
+                }
+
+                dt.nanosecond = nanos;
+            } else {
+                dt.nanosecond = 0;
+            }
+
+            // Parse timezone offset if present
+            if (pos < lexeme.len) {
+                const tz_char = lexeme[pos];
+
+                if (tz_char == 'Z' or tz_char == 'z') {
+                    // UTC timezone
+                    dt.offset_minutes = 0;
+                    pos += 1;
+                } else if (tz_char == '+' or tz_char == '-') {
+                    // Offset timezone: +HH:MM or -HH:MM
+                    pos += 1;
+
+                    if (pos + 5 > lexeme.len) return ParseError.InvalidValue;
+                    if (lexeme[pos + 2] != ':') return ParseError.InvalidValue;
+
+                    const tz_hour = std.fmt.parseInt(i16, lexeme[pos..pos+2], 10) catch return ParseError.InvalidValue;
+                    const tz_min = std.fmt.parseInt(i16, lexeme[pos+3..pos+5], 10) catch return ParseError.InvalidValue;
+
+                    if (tz_hour > 23 or tz_min > 59) return ParseError.InvalidValue;
+
+                    var offset: i16 = tz_hour * 60 + tz_min;
+                    if (tz_char == '-') offset = -offset;
+
+                    dt.offset_minutes = offset;
+                    pos += 5;
+                } else {
+                    // No timezone = local time
+                    dt.offset_minutes = null;
+                }
+            } else {
+                // No timezone = local time
+                dt.offset_minutes = null;
+            }
+
+            // Ensure we've consumed the entire string
+            if (pos != lexeme.len) return ParseError.InvalidValue;
         } else {
             // Date only - set time to midnight
             dt.hour = 0;

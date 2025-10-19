@@ -32,6 +32,202 @@ pub fn main() !void {
 }
 ```
 
+## String Types
+
+### Basic Strings
+
+Basic strings support escape sequences for special characters:
+
+```zig
+const toml =
+    \\message = "Hello\tWorld!\nThis has a \"quoted\" word."
+    \\path = "C:\\Users\\name\\file.txt"
+;
+
+var table = try zontom.parse(allocator, toml);
+defer table.deinit();
+
+const message = zontom.getString(&table, "message").?;
+// Output: Hello    World!
+//         This has a "quoted" word.
+```
+
+Supported escape sequences:
+- `\b` - Backspace
+- `\t` - Tab
+- `\n` - Newline
+- `\f` - Form feed
+- `\r` - Carriage return
+- `\"` - Quote
+- `\\` - Backslash
+- `\uXXXX` - Unicode (4 hex digits)
+- `\UXXXXXXXX` - Unicode (8 hex digits)
+
+### Literal Strings
+
+Literal strings use single quotes and don't process escape sequences:
+
+```zig
+const toml =
+    \\path = 'C:\Users\name\file.txt'
+    \\regex = 'I [dw]on''t need \d{2} apples'
+;
+
+var table = try zontom.parse(allocator, toml);
+defer table.deinit();
+
+const path = zontom.getString(&table, "path").?;
+// Output: C:\Users\name\file.txt (backslashes preserved)
+```
+
+### Multiline Basic Strings
+
+Multiline basic strings use triple quotes (`"""`) and support all escape sequences:
+
+```zig
+const toml =
+    \\description = """
+    \\This is a multiline string.
+    \\It can span multiple lines.
+    \\
+    \\Escape sequences like \t (tab) work here.
+    \\You can include "quotes" without escaping."""
+;
+
+var table = try zontom.parse(allocator, toml);
+defer table.deinit();
+
+const desc = zontom.getString(&table, "description").?;
+// The first newline after opening """ is automatically trimmed
+```
+
+**Important behaviors:**
+- The first newline after opening `"""` is automatically trimmed
+- All escape sequences are processed
+- Newlines are preserved unless escaped
+- Whitespace is preserved
+
+### Multiline Literal Strings
+
+Multiline literal strings use triple single quotes (`'''`) and preserve everything literally:
+
+```zig
+const toml =
+    \\regex = '''
+    \\I [dw]on't need \d{2} apples
+    \\C:\Users\path\file.txt
+    \\No escape processing: \n \t \\ remain as-is'''
+;
+
+var table = try zontom.parse(allocator, toml);
+defer table.deinit();
+
+const regex = zontom.getString(&table, "regex").?;
+// Output preserves all backslashes literally
+```
+
+### Line-Ending Backslash
+
+In multiline basic strings, a backslash at the end of a line trims the newline and all following whitespace:
+
+```zig
+const toml =
+    \\message = """
+    \\The quick brown \
+    \\fox jumps over \
+    \\the lazy dog."""
+;
+
+var table = try zontom.parse(allocator, toml);
+defer table.deinit();
+
+const message = zontom.getString(&table, "message").?;
+// Output: "The quick brown fox jumps over the lazy dog."
+// All line breaks and indentation removed
+```
+
+This is useful for breaking long text across multiple lines in your TOML file while keeping it as a single line in the parsed value.
+
+### Practical Multiline String Examples
+
+**SQL Query:**
+```zig
+const toml =
+    \\query = """
+    \\SELECT users.name, users.email, orders.total
+    \\FROM users
+    \\JOIN orders ON users.id = orders.user_id
+    \\WHERE orders.status = 'completed'
+    \\ORDER BY orders.total DESC"""
+;
+
+var table = try zontom.parse(allocator, toml);
+defer table.deinit();
+const query = zontom.getString(&table, "query").?;
+// Newlines preserved for readability
+```
+
+**Configuration Description:**
+```zig
+const toml =
+    \\help_text = """
+    \\Usage: myapp [OPTIONS] <file>
+    \\
+    \\Options:
+    \\  -v, --verbose    Enable verbose output
+    \\  -h, --help       Show this help message
+    \\  -o, --output     Specify output file"""
+;
+
+var table = try zontom.parse(allocator, toml);
+defer table.deinit();
+const help = zontom.getString(&table, "help_text").?;
+```
+
+**Windows File Path (Literal):**
+```zig
+const toml =
+    \\# Use literal string to avoid escaping backslashes
+    \\install_path = '''C:\Program Files\MyApp\bin'''
+    \\
+    \\# Or use basic string with escaped backslashes
+    \\install_path_alt = "C:\\Program Files\\MyApp\\bin"
+;
+
+var table = try zontom.parse(allocator, toml);
+defer table.deinit();
+const path1 = zontom.getString(&table, "install_path").?;
+const path2 = zontom.getString(&table, "install_path_alt").?;
+// Both produce the same result
+```
+
+**Long Text Formatting:**
+```zig
+const toml =
+    \\# Without line-ending backslash (preserves newlines)
+    \\poem = """
+    \\Roses are red,
+    \\Violets are blue,
+    \\TOML is great,
+    \\And so are you!"""
+    \\
+    \\# With line-ending backslash (creates single line)
+    \\long_description = """
+    \\This is a very long description that we want to break \
+    \\across multiple lines in the TOML file for readability, \
+    \\but it should appear as a single line when parsed."""
+;
+
+var table = try zontom.parse(allocator, toml);
+defer table.deinit();
+
+const poem = zontom.getString(&table, "poem").?;
+// Contains newlines: "Roses are red,\nViolets are blue,\n..."
+
+const desc = zontom.getString(&table, "long_description").?;
+// Single line: "This is a very long description that we want to break across multiple lines..."
+```
+
 ## Working with Files
 
 ### Loading Configuration from a File

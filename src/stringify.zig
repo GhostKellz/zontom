@@ -160,7 +160,17 @@ pub const Stringifier = struct {
         switch (val.*) {
             .string => |s| try self.writeString(s),
             .integer => |i| try self.output.writer(self.allocator).print("{d}", .{i}),
-            .float => |f| try self.output.writer(self.allocator).print("{d}", .{f}),
+            .float => |f| {
+                if (std.math.isNan(f)) {
+                    try self.output.appendSlice(self.allocator, "nan");
+                } else if (std.math.isPositiveInf(f)) {
+                    try self.output.appendSlice(self.allocator, "inf");
+                } else if (std.math.isNegativeInf(f)) {
+                    try self.output.appendSlice(self.allocator, "-inf");
+                } else {
+                    try self.output.writer(self.allocator).print("{d}", .{f});
+                }
+            },
             .boolean => |b| try self.output.appendSlice(self.allocator, if (b) "true" else "false"),
             .datetime => |dt| try self.writeDatetime(dt),
             .date => |d| try self.writeDate(d),

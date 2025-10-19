@@ -98,7 +98,7 @@ pub const Datetime = struct {
     pub fn format(
         self: Datetime,
         comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
+        options: anytype,
         writer: anytype,
     ) !void {
         _ = fmt;
@@ -139,7 +139,7 @@ pub const Date = struct {
     pub fn format(
         self: Date,
         comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
+        options: anytype,
         writer: anytype,
     ) !void {
         _ = fmt;
@@ -158,7 +158,7 @@ pub const Time = struct {
     pub fn format(
         self: Time,
         comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
+        options: anytype,
         writer: anytype,
     ) !void {
         _ = fmt;

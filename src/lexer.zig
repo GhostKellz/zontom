@@ -45,6 +45,8 @@ pub const Lexer = struct {
     current: usize = 0,
     line: usize = 1,
     column: usize = 1,
+    start_line: usize = 1,
+    start_column: usize = 1,
     tokens: std.ArrayList(Token),
     allocator: std.mem.Allocator,
 
@@ -63,6 +65,8 @@ pub const Lexer = struct {
     pub fn scanTokens(self: *Lexer) ![]Token {
         while (!self.isAtEnd()) {
             self.start = self.current;
+            self.start_line = self.line;
+            self.start_column = self.column;
             try self.scanToken();
         }
 
@@ -128,6 +132,10 @@ pub const Lexer = struct {
         // Check for boolean literals
         if (std.mem.eql(u8, text, "true") or std.mem.eql(u8, text, "false")) {
             try self.addToken(.boolean);
+        }
+        // Check for special float values (inf, nan)
+        else if (std.mem.eql(u8, text, "inf") or std.mem.eql(u8, text, "nan")) {
+            try self.addToken(.float);
         } else {
             try self.addToken(.identifier);
         }
@@ -167,7 +175,8 @@ pub const Lexer = struct {
             }
 
             // Handle escape sequences in basic strings (not literal)
-            if (!literal and c == '\\' and !is_multiline) {
+            // Both single-line and multiline basic strings support escapes
+            if (!literal and c == '\\') {
                 _ = self.advance(); // consume backslash
                 if (!self.isAtEnd()) {
                     const escaped = self.advance();
@@ -175,6 +184,22 @@ pub const Lexer = struct {
                     switch (escaped) {
                         'b', 't', 'n', 'f', 'r', '"', '\\' => {},
                         'u', 'U' => {}, // Unicode escapes - simplified for now
+                        '\n' => { // Line-ending backslash in multiline strings
+                            if (is_multiline) {
+                                // Trim the newline, and will trim leading whitespace on next line in parser
+                                self.line += 1;
+                                self.column = 0;
+                            } else {
+                                return LexError.InvalidEscape;
+                            }
+                        },
+                        ' ', '\t' => { // Whitespace after line-ending backslash (allowed in multiline)
+                            if (!is_multiline) {
+                                return LexError.InvalidEscape;
+                            }
+                            // In multiline, backslash before whitespace at line end is valid
+                            // Continue scanning - whitespace will be trimmed in parser
+                        },
                         else => return LexError.InvalidEscape,
                     }
                 }
@@ -190,8 +215,19 @@ pub const Lexer = struct {
         var is_float = false;
 
         // Handle sign
-        if (self.peek() == '-' or self.peek() == '+') {
+        const has_sign = self.peek() == '-' or self.peek() == '+';
+        if (has_sign) {
             _ = self.advance();
+        }
+
+        // Check for special float values: +inf, -inf, +nan, -nan
+        if (has_sign and self.current + 3 <= self.source.len) {
+            const remaining = self.source[self.current..@min(self.current + 3, self.source.len)];
+            if (std.mem.eql(u8, remaining, "inf") or std.mem.eql(u8, remaining, "nan")) {
+                self.current += 3;
+                try self.addToken(.float);
+                return;
+            }
         }
 
         // Check for special date-time pattern (YYYY-MM-DD)
@@ -199,6 +235,15 @@ pub const Lexer = struct {
             const potential_date = self.source[self.current..@min(self.current + 10, self.source.len)];
             if (self.looksLikeDatetime(potential_date)) {
                 try self.datetime();
+                return;
+            }
+        }
+
+        // Check for Local Time pattern (HH:MM:SS)
+        if (self.current + 8 <= self.source.len) {
+            const potential_time = self.source[self.current..@min(self.current + 8, self.source.len)];
+            if (self.looksLikeTime(potential_time)) {
+                try self.time();
                 return;
             }
         }
@@ -253,6 +298,22 @@ pub const Lexer = struct {
         return false;
     }
 
+    fn looksLikeTime(self: *const Lexer, text: []const u8) bool {
+        _ = self;
+        // Basic check for time pattern: HH:MM:SS
+        if (text.len >= 8) {
+            return std.ascii.isDigit(text[0]) and
+                std.ascii.isDigit(text[1]) and
+                text[2] == ':' and
+                std.ascii.isDigit(text[3]) and
+                std.ascii.isDigit(text[4]) and
+                text[5] == ':' and
+                std.ascii.isDigit(text[6]) and
+                std.ascii.isDigit(text[7]);
+        }
+        return false;
+    }
+
     fn datetime(self: *Lexer) !void {
         // Consume date part: YYYY-MM-DD
         while (!self.isAtEnd() and (std.ascii.isDigit(self.peek()) or self.peek() == '-')) {
@@ -278,6 +339,23 @@ pub const Lexer = struct {
         }
 
         try self.addToken(.datetime);
+    }
+
+    fn time(self: *Lexer) !void {
+        // Consume time part: HH:MM:SS
+        while (!self.isAtEnd() and (std.ascii.isDigit(self.peek()) or self.peek() == ':')) {
+            _ = self.advance();
+        }
+
+        // Optional fractional seconds
+        if (!self.isAtEnd() and self.peek() == '.') {
+            _ = self.advance();
+            while (!self.isAtEnd() and std.ascii.isDigit(self.peek())) {
+                _ = self.advance();
+            }
+        }
+
+        try self.addToken(.datetime); // Reuse datetime token type
     }
 
     fn skipComment(self: *Lexer) void {
@@ -320,8 +398,8 @@ pub const Lexer = struct {
         try self.tokens.append(self.allocator, .{
             .type = token_type,
             .lexeme = lexeme,
-            .line = self.line,
-            .column = self.column - (self.current - self.start),
+            .line = self.start_line,
+            .column = self.start_column,
         });
     }
 };
