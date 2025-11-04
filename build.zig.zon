@@ -33,16 +33,20 @@
     // internet connectivity.
     .dependencies = .{
         .zlog = .{
-            .url = "https://github.com/ghostkellz/zlog/archive/refs/heads/main.tar.gz",
-            .hash = "zlog-0.1.1-kS0sWOX2CABYF1yAeeeRt0H7G4kx29h8hhimJW37-tQa",
+            .url = "https://github.com/ghostkellz/zlog/archive/main.tar.gz",
+            .hash = "zlog-0.1.2-kS0sWPD2CAAC0AEFacslajC4VOPVe9gInDl3nDKDsAJF",
         },
         .flash = .{
-            .url = "https://github.com/ghostkellz/flash/archive/refs/heads/main.tar.gz",
-            .hash = "flash-0.3.1-dnj737SSBQDskRlsNuA8Ge2tu0WGVkLQ40Mm4MmiM-_6",
+            .url = "https://github.com/ghostkellz/flash/archive/main.tar.gz",
+            .hash = "flash-0.3.1-dnj738qSBQDhwSkZ5GoK5IE_aKIjwRGR8730Bgakrkc8",
         },
         .flare = .{
-            .url = "https://github.com/ghostkellz/flare/archive/refs/heads/main.tar.gz",
-            .hash = "flare-0.1.0-NK4JafGMAQA8xE2ah8YBxO74sOkWrsQYTkWQ64D1PJVg",
+            .url = "https://github.com/ghostkellz/flare/archive/main.tar.gz",
+            .hash = "flare-0.1.1-NK4JaX6MAQBQc-bpbfSy32p6mw3OAU0kV_2L4rhCl_qC",
+        },
+        .zsync = .{
+            .url = "https://github.com/ghostkellz/zsync/archive/main.tar.gz",
+            .hash = "zsync-0.7.1-KAuhef8qIQApcisOPygXIeE9pC8qzdQL2Jp96JbNQyRm",
         },
     },
     .paths = .{
