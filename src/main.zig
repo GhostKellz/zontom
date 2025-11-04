@@ -41,6 +41,9 @@ pub fn main() !void {
             flash.arg("file", (flash.ArgumentConfig{})
                 .withHelp("Path to the TOML file")
                 .setRequired()),
+            flash.arg("indent", (flash.ArgumentConfig{})
+                .withHelp("Indent size (default: 2)")
+                .withLong("indent")),
         })
         .withFlags(&.{
             flash.flag("in-place", (flash.FlagConfig{})
@@ -49,9 +52,6 @@ pub fn main() !void {
             flash.flag("sort-keys", (flash.FlagConfig{})
                 .withShort('s')
                 .withHelp("Sort keys alphabetically")),
-            flash.flag("indent", (flash.FlagConfig{})
-                .withHelp("Indent size (default: 2)")
-                .withValue()),
         })
         .withHandler(fmtHandler));
 
@@ -108,32 +108,16 @@ fn parseHandler(ctx: flash.Context) flash.Error!void {
 
     logger.info("Parsing TOML file: {s}", .{file_path});
 
-    // Read file
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
-        logger.err("Failed to open file: {s}", .{@errorName(err)});
-        std.debug.print("❌ Error: Failed to open file '{s}': {s}\n", .{ file_path, @errorName(err) });
-        return flash.Error.IOError;
-    };
-    defer file.close();
-
-    const stat = file.stat() catch |err| {
-        logger.err("Failed to stat file: {s}", .{@errorName(err)});
-        std.debug.print("❌ Error: Failed to stat file: {s}\n", .{@errorName(err)});
-        return flash.Error.IOError;
-    };
-
-    const source = ctx.allocator.alloc(u8, stat.size) catch |err| {
-        logger.err("Failed to allocate memory: {s}", .{@errorName(err)});
-        std.debug.print("❌ Error: Failed to allocate memory: {s}\n", .{@errorName(err)});
+    const source = std.fs.cwd().readFileAlloc(file_path, ctx.allocator, std.Io.Limit.unlimited) catch |err| {
+        logger.err("Failed to read file: {s}", .{@errorName(err)});
+        std.debug.print("❌ Error: Failed to read file '{s}': {s}\n", .{ file_path, @errorName(err) });
         return flash.Error.IOError;
     };
     defer ctx.allocator.free(source);
 
-    _ = file.readAll(source) catch |err| {
-        logger.err("Failed to read file: {s}", .{@errorName(err)});
-        std.debug.print("❌ Error: Failed to read file: {s}\n", .{@errorName(err)});
-        return flash.Error.IOError;
-    };
+    if (source.len == 0) {
+        logger.warn("File is empty", .{});
+    }
 
     logger.debug("File size: {} bytes", .{source.len});
 
@@ -195,36 +179,13 @@ fn validateHandler(ctx: flash.Context) flash.Error!void {
     const file_path = ctx.getString("file") orelse return flash.Error.InvalidArgument;
     const quiet = ctx.getFlag("quiet");
 
-    // Read file
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+    const source = std.fs.cwd().readFileAlloc(file_path, ctx.allocator, std.Io.Limit.unlimited) catch |err| {
         if (!quiet) {
-            std.debug.print("❌ Error: Failed to open file '{s}': {s}\n", .{ file_path, @errorName(err) });
-        }
-        return flash.Error.IOError;
-    };
-    defer file.close();
-
-    const stat = file.stat() catch |err| {
-        if (!quiet) {
-            std.debug.print("❌ Error: Failed to stat file: {s}\n", .{@errorName(err)});
-        }
-        return flash.Error.IOError;
-    };
-
-    const source = ctx.allocator.alloc(u8, stat.size) catch |err| {
-        if (!quiet) {
-            std.debug.print("❌ Error: Failed to allocate memory: {s}\n", .{@errorName(err)});
+            std.debug.print("❌ Error: Failed to read file '{s}': {s}\n", .{ file_path, @errorName(err) });
         }
         return flash.Error.IOError;
     };
     defer ctx.allocator.free(source);
-
-    _ = file.readAll(source) catch |err| {
-        if (!quiet) {
-            std.debug.print("❌ Error: Failed to read file: {s}\n", .{@errorName(err)});
-        }
-        return flash.Error.IOError;
-    };
 
     // Parse TOML (validation) with detailed error reporting
     var parse_result = zontom.parseWithContext(ctx.allocator, source);
@@ -262,28 +223,11 @@ fn fmtHandler(ctx: flash.Context) flash.Error!void {
 
     const indent = if (indent_str) |s| std.fmt.parseInt(usize, s, 10) catch 2 else 2;
 
-    // Read file
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
-        std.debug.print("❌ Error: Failed to open file '{s}': {s}\n", .{ file_path, @errorName(err) });
-        return flash.Error.IOError;
-    };
-    defer file.close();
-
-    const stat = file.stat() catch |err| {
-        std.debug.print("❌ Error: Failed to stat file: {s}\n", .{@errorName(err)});
-        return flash.Error.IOError;
-    };
-
-    const source = ctx.allocator.alloc(u8, stat.size) catch |err| {
-        std.debug.print("❌ Error: Failed to allocate memory: {s}\n", .{@errorName(err)});
+    const source = std.fs.cwd().readFileAlloc(file_path, ctx.allocator, std.Io.Limit.unlimited) catch |err| {
+        std.debug.print("❌ Error: Failed to read file '{s}': {s}\n", .{ file_path, @errorName(err) });
         return flash.Error.IOError;
     };
     defer ctx.allocator.free(source);
-
-    _ = file.readAll(source) catch |err| {
-        std.debug.print("❌ Error: Failed to read file: {s}\n", .{@errorName(err)});
-        return flash.Error.IOError;
-    };
 
     // Parse TOML
     var parse_result = zontom.parseWithContext(ctx.allocator, source);

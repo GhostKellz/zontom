@@ -1,6 +1,7 @@
 //! TOML stringification - convert Table back to TOML format
 const std = @import("std");
 const value = @import("value.zig");
+const Io = std.Io;
 
 const Value = value.Value;
 const Table = value.Table;
@@ -43,12 +44,12 @@ pub const Stringifier = struct {
         self.output.deinit(self.allocator);
     }
 
-    pub fn stringify(self: *Stringifier, table: *const Table) ![]const u8 {
+    pub fn stringify(self: *Stringifier, table: *const Table) StringifyError![]const u8 {
         try self.stringifyTable(table, &.{});
         return self.output.items;
     }
 
-    fn stringifyTable(self: *Stringifier, table: *const Table, path: []const []const u8) !void {
+    fn stringifyTable(self: *Stringifier, table: *const Table, path: []const []const u8) StringifyError!void {
         var keys = std.ArrayList([]const u8){};
         defer keys.deinit(self.allocator);
 
@@ -156,10 +157,10 @@ pub const Stringifier = struct {
         }
     }
 
-    fn writeValue(self: *Stringifier, val: *const Value) !void {
+    fn writeValue(self: *Stringifier, val: *const Value) StringifyError!void {
         switch (val.*) {
             .string => |s| try self.writeString(s),
-            .integer => |i| try self.output.writer(self.allocator).print("{d}", .{i}),
+            .integer => |i| try appendFmt(&self.output, self.allocator, "{d}", .{i}),
             .float => |f| {
                 if (std.math.isNan(f)) {
                     try self.output.appendSlice(self.allocator, "nan");
@@ -168,7 +169,7 @@ pub const Stringifier = struct {
                 } else if (std.math.isNegativeInf(f)) {
                     try self.output.appendSlice(self.allocator, "-inf");
                 } else {
-                    try self.output.writer(self.allocator).print("{d}", .{f});
+                    try appendFmt(&self.output, self.allocator, "{d}", .{f});
                 }
             },
             .boolean => |b| try self.output.appendSlice(self.allocator, if (b) "true" else "false"),
@@ -180,7 +181,7 @@ pub const Stringifier = struct {
         }
     }
 
-    fn writeString(self: *Stringifier, s: []const u8) !void {
+    fn writeString(self: *Stringifier, s: []const u8) StringifyError!void {
         try self.output.append(self.allocator, '"');
 
         for (s) |c| {
@@ -199,10 +200,9 @@ pub const Stringifier = struct {
         try self.output.append(self.allocator, '"');
     }
 
-    fn writeDatetime(self: *Stringifier, dt: value.Datetime) !void {
-        const writer = self.output.writer(self.allocator);
-        try writer.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
-            dt.year, dt.month, dt.day,
+    fn writeDatetime(self: *Stringifier, dt: value.Datetime) StringifyError!void {
+        try appendFmt(&self.output, self.allocator, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
+            dt.year, dt.month,  dt.day,
             dt.hour, dt.minute, dt.second,
         });
 
@@ -211,23 +211,21 @@ pub const Stringifier = struct {
             const abs_offset: u16 = @abs(offset);
             const hours = abs_offset / 60;
             const minutes = abs_offset % 60;
-            try writer.print("{c}{d:0>2}:{d:0>2}", .{ sign, hours, minutes });
+            try appendFmt(&self.output, self.allocator, "{c}{d:0>2}:{d:0>2}", .{ sign, hours, minutes });
         } else {
-            try writer.writeAll("Z");
+            try self.output.append(self.allocator, 'Z');
         }
     }
 
-    fn writeDate(self: *Stringifier, d: value.Date) !void {
-        const writer = self.output.writer(self.allocator);
-        try writer.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ d.year, d.month, d.day });
+    fn writeDate(self: *Stringifier, d: value.Date) StringifyError!void {
+        try appendFmt(&self.output, self.allocator, "{d:0>4}-{d:0>2}-{d:0>2}", .{ d.year, d.month, d.day });
     }
 
-    fn writeTime(self: *Stringifier, t: value.Time) !void {
-        const writer = self.output.writer(self.allocator);
-        try writer.print("{d:0>2}:{d:0>2}:{d:0>2}", .{ t.hour, t.minute, t.second });
+    fn writeTime(self: *Stringifier, t: value.Time) StringifyError!void {
+        try appendFmt(&self.output, self.allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{ t.hour, t.minute, t.second });
     }
 
-    fn writeArray(self: *Stringifier, arr: *const Array) !void {
+    fn writeArray(self: *Stringifier, arr: *const Array) StringifyError!void {
         try self.output.append(self.allocator, '[');
 
         for (arr.items.items, 0..) |item, i| {
@@ -238,7 +236,7 @@ pub const Stringifier = struct {
         try self.output.append(self.allocator, ']');
     }
 
-    fn writeInlineTable(self: *Stringifier, tbl: *const Table) !void {
+    fn writeInlineTable(self: *Stringifier, tbl: *const Table) StringifyError!void {
         try self.output.appendSlice(self.allocator, "{ ");
 
         var it = tbl.map.iterator();
@@ -255,7 +253,7 @@ pub const Stringifier = struct {
         try self.output.appendSlice(self.allocator, " }");
     }
 
-    fn writeKey(self: *Stringifier, key: []const u8) !void {
+    fn writeKey(self: *Stringifier, key: []const u8) StringifyError!void {
         // Check if key needs quoting
         const needs_quotes = for (key) |c| {
             if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
@@ -288,6 +286,18 @@ pub fn stringify(allocator: std.mem.Allocator, table: *const Table) ![]const u8 
 
     const result = try stringifier.stringify(table);
     return try allocator.dupe(u8, result);
+}
+
+fn appendFmt(list: *std.ArrayList(u8), allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) StringifyError!void {
+    var writer = Io.Writer.Allocating.fromArrayList(allocator, list);
+    defer {
+        list.* = Io.Writer.Allocating.toArrayList(&writer);
+    }
+    writer.writer.print(fmt, args) catch |err| {
+        return switch (err) {
+            error.WriteFailed => error.InvalidValue,
+        };
+    };
 }
 
 /// Stringify with custom formatting options

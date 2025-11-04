@@ -105,6 +105,8 @@ zontom parse example.toml -v
 
 ## Installation
 
+> **Note:** ZonTOM now targets the latest Zig 0.16.0-dev toolchain. Make sure your Zig compiler is up to date (`zig version` should report `0.16.0-dev` or newer) before building.
+
 ```bash
 # Build the library and CLI
 zig build

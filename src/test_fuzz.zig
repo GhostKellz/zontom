@@ -2,8 +2,9 @@
 
 const std = @import("std");
 const zontom = @import("root.zig");
+const Io = std.Io;
 
-/// Test parsing random bytes doesn't crash
+// Test parsing random bytes doesn't crash
 test "fuzz: random bytes" {
     const testing = std.testing;
 
@@ -21,7 +22,7 @@ test "fuzz: random bytes" {
     }
 }
 
-/// Test parsing extremely long strings
+// Test parsing extremely long strings
 test "fuzz: very long strings" {
     const testing = std.testing;
 
@@ -49,7 +50,7 @@ test "fuzz: very long strings" {
     }
 }
 
-/// Test deeply nested structures
+// Test deeply nested structures
 test "fuzz: deep nesting" {
     const testing = std.testing;
 
@@ -64,10 +65,10 @@ test "fuzz: deep nesting" {
         var j: usize = 0;
         while (j <= i) : (j += 1) {
             if (j > 0) try buffer.appendSlice(".");
-            try std.fmt.format(buffer.writer(), "level{d}", .{j});
+            try appendFmt(&buffer, "level{d}", .{j});
         }
         try buffer.appendSlice("]\n");
-        try std.fmt.format(buffer.writer(), "value = {d}\n\n", .{i});
+        try appendFmt(&buffer, "value = {d}\n\n", .{i});
     }
 
     var result = zontom.parseWithContext(testing.allocator, buffer.items);
@@ -76,7 +77,13 @@ test "fuzz: deep nesting" {
     try testing.expect(result.table != null or result.error_context != null);
 }
 
-/// Test all ASCII characters in strings
+fn appendFmt(buffer: *std.ArrayList(u8), comptime fmt: []const u8, args: anytype) !void {
+    var writer = Io.Writer.Allocating.fromArrayList(buffer.allocator, buffer);
+    defer buffer.* = Io.Writer.Allocating.toArrayList(&writer);
+    try writer.writer.print(fmt, args);
+}
+
+// Test all ASCII characters in strings
 test "fuzz: all ASCII characters" {
     const testing = std.testing;
 
@@ -104,7 +111,7 @@ test "fuzz: all ASCII characters" {
     try testing.expect(result.table != null);
 }
 
-/// Test malformed TOML
+// Test malformed TOML
 test "fuzz: malformed inputs" {
     const testing = std.testing;
 
@@ -118,7 +125,7 @@ test "fuzz: malformed inputs" {
         "123 = value",
         "true = false",
         "[[array]]\n[[array", // Unclosed array of tables
-        "[a.b.\n]",           // Malformed dotted key
+        "[a.b.\n]", // Malformed dotted key
     };
 
     for (malformed) |input| {
@@ -130,17 +137,17 @@ test "fuzz: malformed inputs" {
     }
 }
 
-/// Test edge case numbers
+// Test edge case numbers
 test "fuzz: edge case numbers" {
     const testing = std.testing;
 
     const edge_cases = [_][]const u8{
-        "num = 9223372036854775807",  // i64 max
+        "num = 9223372036854775807", // i64 max
         "num = -9223372036854775808", // i64 min
         "num = 0",
         "num = -0",
-        "flt = 1.7976931348623157e308",    // Large float
-        "flt = 2.2250738585072014e-308",   // Small float
+        "flt = 1.7976931348623157e308", // Large float
+        "flt = 2.2250738585072014e-308", // Small float
         "flt = 0.0",
         "flt = -0.0",
     };
@@ -153,7 +160,7 @@ test "fuzz: edge case numbers" {
     }
 }
 
-/// Test empty and whitespace-only inputs
+// Test empty and whitespace-only inputs
 test "fuzz: empty inputs" {
     const testing = std.testing;
 
@@ -178,7 +185,7 @@ test "fuzz: empty inputs" {
     }
 }
 
-/// Test Unicode handling
+// Test Unicode handling
 test "fuzz: Unicode strings" {
     const testing = std.testing;
 

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const value_mod = @import("value.zig");
+const Io = std.Io;
 
 const Value = value_mod.Value;
 const Table = value_mod.Table;
@@ -44,12 +45,12 @@ fn writeTableAsJSON(output: *std.ArrayList(u8), table: *const Table) !void {
 fn writeValueAsJSON(output: *std.ArrayList(u8), val: *const Value) !void {
     switch (val.*) {
         .string => |s| try writeJSONString(output, s),
-        .integer => |i| try std.fmt.format(output.writer(), "{d}", .{i}),
-        .float => |f| try std.fmt.format(output.writer(), "{d}", .{f}),
+        .integer => |i| try appendFmt(output, "{d}", .{i}),
+        .float => |f| try appendFmt(output, "{d}", .{f}),
         .boolean => |b| try output.appendSlice(if (b) "true" else "false"),
         .datetime => |dt| {
             try output.append('"');
-            try std.fmt.format(output.writer(), "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
+            try appendFmt(output, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
                 dt.year,
                 dt.month,
                 dt.day,
@@ -62,7 +63,7 @@ fn writeValueAsJSON(output: *std.ArrayList(u8), val: *const Value) !void {
                 const abs_offset: u16 = @abs(offset);
                 const hours = abs_offset / 60;
                 const minutes = abs_offset % 60;
-                try std.fmt.format(output.writer(), "{c}{d:0>2}:{d:0>2}", .{ sign, hours, minutes });
+                try appendFmt(output, "{c}{d:0>2}:{d:0>2}", .{ sign, hours, minutes });
             } else {
                 try output.append('Z');
             }
@@ -70,12 +71,12 @@ fn writeValueAsJSON(output: *std.ArrayList(u8), val: *const Value) !void {
         },
         .date => |d| {
             try output.append('"');
-            try std.fmt.format(output.writer(), "{d:0>4}-{d:0>2}-{d:0>2}", .{ d.year, d.month, d.day });
+            try appendFmt(output, "{d:0>4}-{d:0>2}-{d:0>2}", .{ d.year, d.month, d.day });
             try output.append('"');
         },
         .time => |t| {
             try output.append('"');
-            try std.fmt.format(output.writer(), "{d:0>2}:{d:0>2}:{d:0>2}", .{ t.hour, t.minute, t.second });
+            try appendFmt(output, "{d:0>2}:{d:0>2}:{d:0>2}", .{ t.hour, t.minute, t.second });
             try output.append('"');
         },
         .array => |*arr| try writeArrayAsJSON(output, arr),
@@ -106,7 +107,7 @@ fn writeJSONString(output: *std.ArrayList(u8), s: []const u8) !void {
             '\x08' => try output.appendSlice("\\b"),
             '\x0C' => try output.appendSlice("\\f"),
             else => if (c < 0x20) {
-                try std.fmt.format(output.writer(), "\\u{x:0>4}", .{c});
+                try appendFmt(output, "\\u{x:0>4}", .{c});
             } else {
                 try output.append(c);
             },
@@ -153,12 +154,12 @@ fn writeTableAsJSONPretty(output: *std.ArrayList(u8), table: *const Table, inden
 fn writeValueAsJSONPretty(output: *std.ArrayList(u8), val: *const Value, indent_size: usize, level: usize) !void {
     switch (val.*) {
         .string => |s| try writeJSONString(output, s),
-        .integer => |i| try std.fmt.format(output.writer(), "{d}", .{i}),
-        .float => |f| try std.fmt.format(output.writer(), "{d}", .{f}),
+        .integer => |i| try appendFmt(output, "{d}", .{i}),
+        .float => |f| try appendFmt(output, "{d}", .{f}),
         .boolean => |b| try output.appendSlice(if (b) "true" else "false"),
         .datetime => |dt| {
             try output.append('"');
-            try std.fmt.format(output.writer(), "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
+            try appendFmt(output, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
                 dt.year,
                 dt.month,
                 dt.day,
@@ -171,7 +172,7 @@ fn writeValueAsJSONPretty(output: *std.ArrayList(u8), val: *const Value, indent_
                 const abs_offset: u16 = @abs(offset);
                 const hours = abs_offset / 60;
                 const minutes = abs_offset % 60;
-                try std.fmt.format(output.writer(), "{c}{d:0>2}:{d:0>2}", .{ sign, hours, minutes });
+                try appendFmt(output, "{c}{d:0>2}:{d:0>2}", .{ sign, hours, minutes });
             } else {
                 try output.append('Z');
             }
@@ -179,12 +180,12 @@ fn writeValueAsJSONPretty(output: *std.ArrayList(u8), val: *const Value, indent_
         },
         .date => |d| {
             try output.append('"');
-            try std.fmt.format(output.writer(), "{d:0>4}-{d:0>2}-{d:0>2}", .{ d.year, d.month, d.day });
+            try appendFmt(output, "{d:0>4}-{d:0>2}-{d:0>2}", .{ d.year, d.month, d.day });
             try output.append('"');
         },
         .time => |t| {
             try output.append('"');
-            try std.fmt.format(output.writer(), "{d:0>2}:{d:0>2}:{d:0>2}", .{ t.hour, t.minute, t.second });
+            try appendFmt(output, "{d:0>2}:{d:0>2}:{d:0>2}", .{ t.hour, t.minute, t.second });
             try output.append('"');
         },
         .array => |*arr| try writeArrayAsJSONPretty(output, arr, indent_size, level),
@@ -227,6 +228,16 @@ fn writeArrayAsJSONPretty(output: *std.ArrayList(u8), arr: *const Array, indent_
         try writeIndent(output, indent_size, level);
         try output.append(']');
     }
+}
+
+fn appendFmt(output: *std.ArrayList(u8), comptime fmt: []const u8, args: anytype) ConvertError!void {
+    var writer = Io.Writer.Allocating.fromArrayList(output.allocator, output);
+    defer output.* = Io.Writer.Allocating.toArrayList(&writer);
+    writer.writer.print(fmt, args) catch |err| {
+        return switch (err) {
+            error.WriteFailed => error.InvalidValue,
+        };
+    };
 }
 
 fn writeIndent(output: *std.ArrayList(u8), indent_size: usize, level: usize) !void {
